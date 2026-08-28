@@ -1,39 +1,28 @@
 # N+1 Query Baseline
 
-This is the initial investigation project for the micro1 Frontier Engineering Challenge 2026. It intentionally reproduces an N+1 query pattern in a small Spring Boot application. It does not contain an AI solution or an N+1 fix.
+This is the initial investigation and baseline project for the
+micro1 Frontier Engineering Challenge 2026.
 
-## Requirements
+The project intentionally reproduces an **N+1 query problem** in a small
+Spring Boot application. It establishes a measurable baseline that will
+later be used to evaluate an advanced agent-based solution.
 
-- JDK 25
-- No globally installed Maven is required; use the Maven Wrapper
+This baseline does **not** contain an AI agent or an N+1 query fix.
 
-## Run the tests
+---
 
-```powershell
-.\mvnw.cmd test
-```
+## Problem
 
-## Run the application
+When an application loads a collection of related entities lazily and then
+accesses that collection separately for every parent entity, Hibernate can
+execute one additional SQL query for each parent.
 
-```powershell
-.\mvnw.cmd spring-boot:run
-```
-
-In another PowerShell window, call the endpoint:
-
-```powershell
-Invoke-RestMethod http://localhost:8080/authors
-```
-
-The response contains 5 authors, each with a `bookCount` of 3. Hibernate SQL is logged in the application window. Look for one query selecting all authors followed by five separate queries selecting books by `author_id`, for example:
+For example, if the application loads 5 authors and then loads the books for
+each author separately, the database receives:
 
 ```text
-select ... from author
-select ... from book ... where ... author_id=?
-select ... from book ... where ... author_id=?
-select ... from book ... where ... author_id=?
-select ... from book ... where ... author_id=?
-select ... from book ... where ... author_id=?
-```
-
-The `Author.books` collection uses the default lazy fetch behavior for `@OneToMany`. The controller then calls `author.getBooks().size()` once for every author, which initializes each collection separately and intentionally creates the N+1 pattern.
+1 query to load authors
++
+5 queries to load books
+=
+6 total queries
