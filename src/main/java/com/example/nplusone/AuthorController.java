@@ -17,7 +17,7 @@ public class AuthorController {
     @GetMapping("/authors")
     @Transactional(readOnly = true)
     public List<AuthorResponse> getAuthors() {
-        return authorRepository.findAllWithBooks().stream()
+        return authorRepository.findAll().stream()
                 .map(author -> new AuthorResponse(author.getId(), author.getName(), author.getBooks().size()))
                 .toList();
     }
