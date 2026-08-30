@@ -1086,43 +1086,150 @@ EXPERIMENT_LOGS.md
 
 # 17. Reproduction Guide
 
-This section is written for a developer starting from a clean environment.
+This section describes how to reproduce the N+1 problem from the historical baseline, introduce the autonomous agent into that baseline environment, and verify that the agent-generated fix reduces the runtime SQL query count from 6 queries to 1 query.
+
+The repository's current `main` branch contains the final fixed implementation and the agent code. Therefore, a fresh clone of `main` does **not** initially reproduce the 6-query baseline.
+
+The original N+1 implementation is preserved in Git history at:
+
+```text
+78f89c5 baseline: reproduce N+1 query problems
+```
+
+The reproduction procedure below uses a separate local clone and temporary branch so that the published `main` branch remains unchanged.
 
 ## Requirements
 
 Install:
 
-* Java 25
 * Git
-* a working internet connection for Maven dependency resolution
+* Java 25
+* A working internet connection for Maven dependency resolution
 
 The repository includes the Maven Wrapper, so Maven does not need to be installed separately.
 
-## Clone the repository
+## Clone the Repository
+
+Choose any directory where you want to create the temporary reproduction workspace.
+
+Clone the repository:
+
+```bash
+git clone https://github.com/mohd-uzaifa/micro1-nplusone-agent.git nplusone-reproduction
+```
+
+Enter the cloned repository:
+
+```bash
+cd nplusone-reproduction
+```
+
+## Verify the Clone
+
+Check the repository state:
+
+```bash
+git status
+```
+
+A fresh clone should have a clean working tree.
+
+The repository contains the Maven Wrapper, source code, tests, and project configuration:
 
 ```text
-git clone https://github.com/mohd-uzaifa/micro1-nplusone-agent.git
-cd micro1-nplusone-agent
+.mvn/
+src/
+mvnw
+mvnw.cmd
+pom.xml
+README.md
+```
+
+## Inspect the Project History
+
+The original N+1 baseline is preserved in Git history.
+
+Run:
+
+```bash
+git log --oneline --all
+```
+
+The baseline commit can be identified as:
+
+```text
+78f89c5 baseline: reproduce N+1 query problems
+```
+
+## Checkout the Baseline
+
+Switch the temporary clone to the historical baseline:
+
+```bash
+git checkout 78f89c5
+```
+
+Git will report that the repository is in a detached HEAD state. This is expected because the reproduction intentionally uses a historical commit rather than the current `main` branch.
+
+Verify the current state:
+
+```bash
+git status
+```
+
+Expected:
+
+```text
+HEAD detached at 78f89c5
+nothing to commit, working tree clean
+```
+
+Verify the exact commit:
+
+```bash
+git log -1 --oneline
+```
+
+Expected:
+
+```text
+78f89c5 (HEAD) baseline: reproduce N+1 query problems
 ```
 
 ## Verify Java
 
-```text
+Run:
+
+### Windows PowerShell
+
+```powershell
 java -version
 ```
 
-Expected major version:
+### macOS / Linux
+
+```bash
+java -version
+```
+
+The required major version is:
 
 ```text
 25
 ```
 
-## Compile
+## Compile the Baseline
 
-Windows:
+### Windows
 
-```text
+```powershell
 .\mvnw.cmd compile
+```
+
+### macOS / Linux
+
+```bash
+./mvnw compile
 ```
 
 Expected result:
@@ -1131,10 +1238,18 @@ Expected result:
 BUILD SUCCESS
 ```
 
-## Run tests
+## Run the Baseline Tests
 
-```text
+### Windows
+
+```powershell
 .\mvnw.cmd test
+```
+
+### macOS / Linux
+
+```bash
+./mvnw test
 ```
 
 Expected result:
@@ -1148,27 +1263,27 @@ Skipped: 0
 BUILD SUCCESS
 ```
 
-## Run the application
-
-```text
-.\mvnw.cmd spring-boot:run
-```
-
-The application exposes:
-
-```text
-GET /authors
-```
-
-The endpoint can be requested using a browser or HTTP client.
+The passing test confirms that the baseline application is functionally valid. It does not by itself prove the presence or absence of an N+1 problem; runtime SQL evidence is used for that purpose.
 
 ---
 
-# 18. Reproducing the Baseline
+# 18. Reproducing the Baseline N+1 Problem
 
-To reproduce the original N+1 behavior, the controlled baseline implementation must be present.
+The historical baseline contains the original repository implementation:
 
-The relevant code path is:
+```java
+package com.example.nplusone;
+
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface AuthorRepository extends JpaRepository<Author, Long> {
+
+}
+```
+
+There is no `@EntityGraph` on the baseline repository method.
+
+The controller accesses the lazy `books` collection after retrieving the authors:
 
 ```text
 authorRepository.findAll()
@@ -1176,27 +1291,47 @@ authorRepository.findAll()
 author.getBooks().size()
 ```
 
-Run:
+This causes Hibernate to issue one query for the authors and an additional query for each author's books.
 
-```text
-.\mvnw.cmd test
-```
+## Start the Baseline Application
 
-Then start the application:
+### Windows
 
-```text
+```powershell
 .\mvnw.cmd spring-boot:run
 ```
 
-Call:
+### macOS / Linux
 
-```text
-GET /authors
+```bash
+./mvnw spring-boot:run
 ```
 
-Inspect the Hibernate SQL logs.
+Wait for Spring Boot to start successfully.
 
-Expected behavior:
+Open a **second terminal** and enter the same reproduction workspace:
+
+```bash
+cd nplusone-reproduction
+```
+
+Call the endpoint:
+
+### Windows
+
+```powershell
+curl.exe http://localhost:8080/authors
+```
+
+### macOS / Linux
+
+```bash
+curl http://localhost:8080/authors
+```
+
+Inspect the Hibernate SQL output in the terminal running Spring Boot.
+
+The reproduced baseline produces:
 
 ```text
 1 author query
@@ -1206,119 +1341,374 @@ Expected behavior:
 6 SQL queries
 ```
 
-The five book queries should correspond to:
+The five additional book queries correspond to:
 
 ```text
 author IDs: 1, 2, 3, 4, 5
 ```
 
+This establishes the original N+1 behavior using runtime SQL evidence.
+
+Stop the application after confirming the baseline:
+
+```text
+Ctrl + C
+```
+
+At this point, the baseline has been independently reproduced from the published Git history.
+
 ---
 
-# 19. Reproducing the Fixed Implementation
+# 19. Preparing the Baseline for Agent Execution
 
-The fixed repository method uses:
+The autonomous agent was introduced after the baseline commit.
+
+The agent-related history is:
+
+```text
+3ca59e7 chore: add Gemini Java SDK connection
+b63fb38 experiment 4: add agent analysis and file inspection
+53217ff experiment 4: complete autonomous verification loop
+```
+
+Therefore, the baseline commit itself does not contain:
+
+```text
+src/main/java/com/example/nplusone/agent/
+```
+
+To reproduce the agent workflow, create a temporary branch from the baseline:
+
+```bash
+git switch -c agent-reproduction
+```
+
+This branch exists only in the local reproduction workspace and does not modify the published `main` branch.
+
+## Bring the Agent Components into the Baseline Workspace
+
+The agent requires the Gemini Java SDK dependency and the agent implementation.
+
+Bring the current project configuration from `main` into the temporary baseline workspace:
+
+```bash
+git checkout main -- pom.xml
+```
+
+Then bring in the agent implementation:
+
+```bash
+git checkout main -- src/main/java/com/example/nplusone/agent
+```
+
+The resulting agent directory contains:
+
+```text
+src/main/java/com/example/nplusone/agent/
+├── FileTools.java
+├── GeminiTest.java
+└── NPlusOneAgent.java
+```
+
+The important distinction is that the baseline application source remains the N+1 version.
+
+In particular:
+
+```text
+src/main/java/com/example/nplusone/AuthorRepository.java
+```
+
+remains the baseline implementation without `@EntityGraph`.
+
+Check the workspace:
+
+```bash
+git status
+```
+
+The expected changes are the Gemini dependency and agent files. `AuthorRepository.java` should **not** be modified at this stage.
+
+## Compile the Agent-Enabled Baseline
+
+### Windows
+
+```powershell
+.\mvnw.cmd compile
+```
+
+### macOS / Linux
+
+```bash
+./mvnw compile
+```
+
+Expected result:
+
+```text
+BUILD SUCCESS
+```
+
+## Build the Agent Dependency Classpath
+
+Generate the Maven dependency classpath:
+
+### Windows
+
+```powershell
+.\mvnw.cmd dependency:build-classpath "-Dmdep.outputFile=cp.txt"
+```
+
+### macOS / Linux
+
+```bash
+./mvnw dependency:build-classpath "-Dmdep.outputFile=cp.txt"
+```
+
+Expected result:
+
+```text
+BUILD SUCCESS
+```
+
+This creates:
+
+```text
+cp.txt
+```
+
+containing the dependency classpath required to execute the agent.
+
+## Configure Gemini Authentication
+
+The agent uses the Google GenAI Java SDK through:
+
+```java
+Client client = new Client();
+```
+
+Gemini authentication must therefore be available through the supported environment configuration.
+
+For example, using the `GEMINI_API_KEY` environment variable:
+
+### Windows PowerShell
+
+```powershell
+$env:GEMINI_API_KEY
+```
+
+### macOS / Linux
+
+```bash
+echo "$GEMINI_API_KEY"
+```
+
+An API key should already be configured in the environment before running the agent.
+
+---
+
+# 20. Agent Fix and Autonomous Verification
+
+The agent is launched from the root of the temporary `agent-reproduction` workspace.
+
+Because the agent is a Java class with dependencies, the Maven-generated classpath is used to launch it.
+
+## Construct the Java Classpath
+
+### Windows PowerShell
+
+```powershell
+$cp = "target\classes;" + (Get-Content .\cp.txt -Raw).Trim()
+```
+
+### macOS / Linux
+
+```bash
+CP="target/classes:$(cat cp.txt)"
+```
+
+## Run the Autonomous Agent
+
+### Windows PowerShell
+
+```powershell
+java -cp $cp com.example.nplusone.agent.NPlusOneAgent
+```
+
+### macOS / Linux
+
+```bash
+java -cp "$CP" com.example.nplusone.agent.NPlusOneAgent
+```
+
+The agent performs the following workflow:
+
+```text
+Read source files
+        ↓
+Analyze N+1 behavior
+        ↓
+Generate proposed fix
+        ↓
+Restricted write to AuthorRepository.java
+        ↓
+Run Maven verification
+        ↓
+Inspect verification output
+        ↓
+Ask Gemini to evaluate verification
+```
+
+The agent reads:
+
+```text
+AuthorController.java
+AuthorRepository.java
+Author.java
+```
+
+and is restricted to modifying:
+
+```text
+src/main/java/com/example/nplusone/AuthorRepository.java
+```
+
+## Agent-Generated Fix
+
+During the reproduced run, the agent identified the lazy-loading N+1 problem and generated the following repository implementation:
+
+```java
+package com.example.nplusone;
+
+import java.util.List;
+import org.springframework.data.jpa.repository.EntityGraph;
+import org.springframework.data.jpa.repository.JpaRepository;
+
+public interface AuthorRepository extends JpaRepository<Author, Long> {
+
+    @Override
+    @EntityGraph(attributePaths = "books")
+    List<Author> findAll();
+}
+```
+
+The important change is:
 
 ```java
 @EntityGraph(attributePaths = "books")
 ```
 
-The controller calls:
+This causes the authors and their books to be fetched through a join rather than issuing a separate lazy-load query for every author.
+
+## Agent Verification
+
+The reproduced agent execution returned:
 
 ```text
-findAllWithBooks()
+===== WRITE RESULT =====
+SUCCESS: File written: src/main/java/com/example/nplusone/AuthorRepository.java
 ```
 
-Run:
+The automatic verification returned:
 
 ```text
-.\mvnw.cmd test
+EXIT_CODE: 0
+
+SQL EVIDENCE:
+select
+        a1_0.id,
+        b1_0.author_id,
+        b1_0.id,
+        b1_0.title,
+        a1_0.name
+    from
+        author a1_0
+    left join
+        book b1_0
+            on a1_0.id=b1_0.author_id
+
+TEST RESULT:
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0
+
+BUILD SUCCESS
 ```
 
-Then start the application:
+The verification therefore showed a single SQL statement containing a `LEFT JOIN` between `author` and `book`.
 
-```text
+## Independent Runtime Verification
+
+The agent's verification output is not treated as the only proof of the N+1 fix.
+
+After the agent modifies `AuthorRepository.java`, start the application again.
+
+### Windows
+
+```powershell
 .\mvnw.cmd spring-boot:run
 ```
 
-Call:
+### macOS / Linux
 
-```text
-GET /authors
+```bash
+./mvnw spring-boot:run
 ```
 
-Expected Hibernate behavior:
+Open a second terminal and enter the same reproduction workspace:
+
+```bash
+cd nplusone-reproduction
+```
+
+Call the endpoint:
+
+### Windows
+
+```powershell
+curl.exe http://localhost:8080/authors
+```
+
+### macOS / Linux
+
+```bash
+curl http://localhost:8080/authors
+```
+
+Inspect the Hibernate SQL output.
+
+The independently reproduced fixed implementation generates:
 
 ```text
 1 SQL query
 ```
 
-The query should contain a join between:
+with the author and book data retrieved using a join.
+
+The complete observed transformation is therefore:
 
 ```text
-author
-book
+Baseline implementation
+        ↓
+6 SQL queries
+        ↓
+Autonomous N+1 analysis
+        ↓
+Agent-generated @EntityGraph fix
+        ↓
+Agent verification: BUILD SUCCESS
+        ↓
+Independent runtime SQL verification
+        ↓
+1 SQL query
 ```
 
-Expected shape:
+This demonstrates the complete workflow from a reproducible historical N+1 baseline to an agent-generated fix and independently verified runtime improvement.
 
-```sql
-select
-    ...
-from
-    author
-left join
-    book
-        on author.id = book.author_id
-```
-
----
-
-# 20. Reproducing the Advanced Agent Verification
-
-The advanced agent uses:
+The historical baseline remains available at:
 
 ```text
-FileTools.readFile()
-FileTools.writeFile()
-FileTools.runVerification()
+78f89c5
 ```
 
-The intended workflow is:
-
-```text
-Read source
-    ↓
-Analyze
-    ↓
-Generate proposed fix
-    ↓
-Restricted write
-    ↓
-Run verification
-    ↓
-Inspect SQL/test/build evidence
-    ↓
-Determine success
-```
-
-The final verification command is:
-
-```text
-.\mvnw.cmd test
-```
-
-The documented successful run returned:
-
-```text
-EXIT_CODE: 0
-
-Tests run: 1
-Failures: 0
-Errors: 0
-Skipped: 0
-
-BUILD SUCCESS
-```
+while the published `main` branch contains the completed implementation and documented experiments.
 
 ---
 
