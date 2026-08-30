@@ -1101,8 +1101,8 @@ The repository includes the Maven Wrapper, so Maven does not need to be installe
 ## Clone the repository
 
 ```text
-git clone https://github.com/mohd-uzaifa/micro-nplusone-agent.git
-cd micro-nplusone-agent
+git clone https://github.com/mohd-uzaifa/micro1-nplusone-agent.git
+cd micro1-nplusone-agent
 ```
 
 ## Verify Java
