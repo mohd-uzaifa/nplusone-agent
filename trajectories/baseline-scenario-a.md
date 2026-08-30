@@ -1,4 +1,4 @@
-# Baseline Trajectory — Gemini
+# Baseline Trajectory — Gemini One-Shot Fix
 
 ## Experiment
 
@@ -10,15 +10,41 @@
 
 ## Tool Purpose
 
-Establish the simple one-shot baseline for identifying and fixing the
-N+1 query problem.
+Establish the simple one-shot AI baseline for identifying and fixing the N+1 query problem.
 
-The baseline receives the existing application source code and provides
-one proposed fix based only on static inspection. It does not perform an
-observe → modify → verify → retry loop.
+The baseline receives the existing application source code and provides one proposed fix based on static inspection. It does not perform an autonomous observe → modify → verify → retry loop.
+
+## Agent Context
+
+The baseline application contains an intentional N+1 query problem involving `Author` and `Book` entities.
+
+The application loads all authors and then accesses each author's books.
+
+The relevant execution path is:
+
+```text
+authorRepository.findAll()
+
+        ↓
+
+author.getBooks().size()
+
+        ↓
+
+1 author query + N book queries
+```
+
+With 5 authors, the expected baseline behavior is:
+
+```text
+1 + 5 = 6 SQL queries
+```
 
 ## Prompt
 
+The following prompt was used with Gemini Pro:
+
+```text
 You are reviewing a Spring Boot application for a database performance problem.
 
 The application has Author and Book entities. The application loads all authors and then accesses each author's books.
@@ -45,131 +71,136 @@ Do not modify unrelated files.
 Do not claim that the fix has been verified because you cannot run the application.
 
 This is a one-shot baseline experiment. Give your best solution based only on the provided source code.
+```
 
-## Gemini Response
+## Gemini Analysis
 
-Yes, the provided application contains a classic N+1 query problem.
+Gemini correctly identified the application as containing a classic N+1 query problem.
 
-### 1. Why the N+1 Problem Occurs
+### Why the N+1 Problem Occurs
 
-The issue stems from the interaction between how the `Author` entity maps its
-`books` collection and how the controller accesses that data. By default, JPA
-`@OneToMany` relationships are lazily loaded, meaning the associated `books`
-are not retrieved from the database until they are explicitly accessed.
+The `Author` entity contains a lazy-loaded `books` collection.
 
-When the application retrieves all authors, it executes a single SQL query (`1`).
-Then, it iterates through each author to get the count of their books. Because
-the collection is lazy-loaded, Hibernate issues an additional SQL query to fetch
-the books for each author (`N`). If there are 5 authors, the application executes
-1 + 5 = 6 queries.
+When the application executes:
 
-### 2. Exact Code Responsible
+```java
+authorRepository.findAll()
+```
 
-The problem is triggered in `AuthorController.java` within the `getAuthors()`
-method:
+Hibernate first loads all authors with one SQL query.
 
-- **The "1" Query:** `authorRepository.findAll()` fetches all authors in one query.
-- **The "N" Queries:** Inside the stream map operation, calling
-  `author.getBooks().size()` forces the initialization of the lazy collection for
-  each individual author, triggering a new query each time.
+The controller then accesses:
 
-### 3. Proposed Spring Data JPA Fix
+```java
+author.getBooks().size()
+```
 
-The most idiomatic Spring Data JPA solution is to use `@EntityGraph` to define
-an eager fetch plan for this specific operation. By specifying
-`attributePaths = "books"`, we instruct Hibernate to fetch the authors and their
-associated books in a single SQL query using a `LEFT OUTER JOIN`.
+for each author.
 
-### 4. Required Code Changes
+Because the `books` collection is lazy-loaded, Hibernate performs an additional query when the collection for each author is accessed.
 
-**Modify `AuthorRepository.java`:**
+For 5 authors, the resulting pattern is:
 
-Add a new method that uses `@EntityGraph` to eagerly fetch the books.
+```text
+1 author query
++
+5 book queries
+=
+6 SQL queries
+```
+
+Therefore, the application exhibits the expected `1 + N` query pattern.
+
+## Exact Code Responsible
+
+The N+1 behavior is caused by the combination of:
+
+```java
+authorRepository.findAll()
+```
+
+and:
+
+```java
+author.getBooks().size()
+```
+
+The first operation loads the authors.
+
+The second operation forces the lazy `books` collection to be initialized separately for each author.
+
+## Proposed Fix
+
+Gemini proposed using Spring Data JPA's `@EntityGraph` to fetch the books together with the authors.
+
+The proposed repository change was:
 
 ```java
 package com.example.nplusone;
 
+import java.util.List;
+
 import org.springframework.data.jpa.repository.EntityGraph;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
-import java.util.List;
 
 public interface AuthorRepository extends JpaRepository<Author, Long> {
 
     @EntityGraph(attributePaths = "books")
     @Query("SELECT a FROM Author a")
     List<Author> findAllWithBooks();
+
 }
 ```
 
-**Modify `AuthorController.java`:**
-
-Update the controller to call the new method instead of `findAll()`.
+The controller was changed to call:
 
 ```java
-package com.example.nplusone;
-
-import java.util.List;
-import org.springframework.transaction.annotation.Transactional;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-@RestController
-public class AuthorController {
-
-    private final AuthorRepository authorRepository;
-
-    public AuthorController(AuthorRepository authorRepository) {
-        this.authorRepository = authorRepository;
-    }
-
-    @GetMapping("/authors")
-    @Transactional(readOnly = true)
-    public List<AuthorResponse> getAuthors() {
-        return authorRepository.findAllWithBooks().stream()
-                .map(author -> new AuthorResponse(
-                        author.getId(),
-                        author.getName(),
-                        author.getBooks().size()))
-                .toList();
-    }
-
-    public record AuthorResponse(Long id, String name, int bookCount) {
-    }
-}
+authorRepository.findAllWithBooks()
 ```
 
-### 5. Why This Reduces SQL Queries
+instead of:
 
-The `@EntityGraph` instructs the JPA provider (Hibernate) to ignore the
-default lazy fetch strategy for the `books` collection just for this specific
-method call. Hibernate will generate a single SQL statement with a
-`LEFT OUTER JOIN` between the `author` and `book` tables. This retrieves all
-authors and their corresponding books in one query, eliminating the N
-subsequent queries.
+```java
+authorRepository.findAll()
+```
 
-### 6. Trade-offs and Considerations
+## Why the Fix Works
 
-- **Memory Consumption:** Joining a collection duplicates the root entity's
-  data in the JDBC result set for every child row. If an author has 1000 books,
-  the author's information is returned 1000 times in the raw SQL result set
-  before Hibernate deduplicates it in memory. This can consume excess memory
-  if collections are massive.
+The `@EntityGraph(attributePaths = "books")` annotation instructs Hibernate to fetch the `books` association as part of the repository operation.
 
-- **Multiple Collections:** You should generally avoid fetching multiple
-  `List` collections simultaneously with joins, as it can result in a Cartesian
-  product.
+In the observed execution, Hibernate generated a single SQL query containing a `LEFT JOIN` between the `author` and `book` tables.
 
-- **Targeted Fetching:** A dedicated method such as `findAllWithBooks()` ensures
-  that the additional data is fetched only when it is actually needed.
+This avoids the separate book-loading query for each author.
 
-## Human Observation
+The observed query count changed from:
 
-Gemini correctly identified the N+1 query in the existing Spring Boot
-application and proposed an `@EntityGraph`-based fix.
+```text
+Baseline:       6 SQL queries
+Gemini fix:     1 SQL query
+```
 
-The proposed fix was then applied to the application and verified separately
-using the existing Maven Wrapper and running application.
+This represents a reduction of:
+
+```text
+6 → 1
+```
+
+or approximately **83.3% fewer SQL queries** for this specific five-author scenario.
+
+## Trade-offs Identified by Gemini
+
+Gemini identified several considerations:
+
+* Joining a collection can increase the size of the database result set because author data may be repeated for multiple book rows.
+* Fetching multiple collections through joins can create large result sets or Cartesian-product effects.
+* A dedicated fetch method such as `findAllWithBooks()` keeps the additional data fetching targeted to operations that actually need the books.
+
+## Human Verification
+
+The Gemini response itself did not claim runtime verification.
+
+The proposed changes were subsequently applied to the application and verified separately using the Maven Wrapper and the running Spring Boot application.
 
 The original implementation produced:
 
@@ -177,18 +208,14 @@ The original implementation produced:
 1 author query + 5 book queries = 6 SQL queries
 ```
 
-After applying Gemini's proposed fix, the `/authors` endpoint produced a
-single SQL query using a `LEFT JOIN` between `author` and `book`.
+After applying the Gemini-proposed fix, the `/authors` endpoint produced a single SQL query using a `LEFT JOIN`.
 
-The observed result was therefore:
+The observed result was:
 
 ```text
 Original N+1 implementation: 6 SQL queries
 Gemini one-shot fix:          1 SQL query
 ```
-
-This represents a reduction of 5 SQL queries, or approximately 83.3% for
-this specific scenario.
 
 ## Verification
 
@@ -199,6 +226,7 @@ Tests run: 1
 Failures: 0
 Errors: 0
 Skipped: 0
+
 BUILD SUCCESS
 ```
 
@@ -218,72 +246,76 @@ left join
         on a1_0.id = b1_0.author_id
 ```
 
-This confirms that the proposed `@EntityGraph` approach resulted in a single
-joined query for the author/book data in Scenario A.
+This confirms that the applied `@EntityGraph` approach resulted in a single joined query for the author/book data in Scenario A.
 
 ## Evidence
 
 ### Original N+1 Evidence
 
-The original implementation is documented in:
-
 ```text
 evidence/baseline_nplusone_sql/
+
 ├── author-book-queries.png
 ├── author-id-bindings1.png
 └── author-id-bindings2.png
 ```
 
-These screenshots show the author query followed by the separate book queries
-and their bound author IDs.
+These screenshots document the original author query followed by the separate book queries and their bound author IDs.
 
 ### Gemini Fix Evidence
 
-The result of the one-shot Gemini fix is documented in:
-
 ```text
 evidence/baseline_gemini_fix/
+
 ├── baseline-gemini-response.png
 └── baseline-gemini-sql.png
 ```
 
-`baseline-gemini-sql.png` contains the Hibernate SQL showing the `LEFT JOIN`
-between `author` and `book`.
+`baseline-gemini-response.png` captures the Gemini one-shot analysis and proposed solution.
+
+`baseline-gemini-sql.png` captures the resulting Hibernate SQL showing the `LEFT JOIN` between `author` and `book`.
 
 ## Baseline Limitation
 
-Although the one-shot Gemini baseline successfully identified and fixed the
-N+1 problem in Scenario A, it does not close an autonomous feedback loop.
+Although the Gemini one-shot baseline successfully identified and fixed the N+1 problem, it did not close an autonomous engineering feedback loop.
 
-Gemini was given the source code and produced a proposed solution, but it did
-not independently:
+Gemini was given the source code and produced a proposed solution, but it did not independently:
 
 1. inspect runtime SQL,
 2. measure the original query count,
-3. apply the change,
+3. modify the project,
 4. run the application,
 5. verify the resulting query count, or
-6. retry if the proposed solution failed.
+6. retry when verification could fail.
 
-Therefore, the one-shot baseline demonstrates that an LLM can provide a
-reasonable static fix, but it does not demonstrate autonomous diagnosis and
-verification.
+The implementation and runtime verification were performed separately.
 
-This limitation motivates the advanced agent that will be developed in the
-next phase.
+Therefore, this experiment establishes a **one-shot AI solution baseline**, rather than a fully autonomous software engineering agent.
+
+This limitation motivated the development of Experiment 4 — Advanced Agent.
 
 ## Baseline Conclusion
 
-For Scenario A, the simple one-shot Gemini baseline reduced the observed
-query count from:
+For Scenario A, the one-shot Gemini solution successfully reduced the observed query count from:
 
 ```text
 6 queries → 1 query
 ```
 
-The result establishes a measurable baseline for comparison with the advanced
-agent.
+The experiment establishes a measurable baseline for comparison with the advanced agent.
 
-The advanced agent will be evaluated not only on whether it can produce a fix,
-but also on whether it can **observe, diagnose, modify, verify, and retry**
-using actual feedback from the application.
+The advanced agent is evaluated not only on whether it can produce a correct fix, but also on whether it can:
+
+```text
+observe
+  ↓
+diagnose
+  ↓
+modify
+  ↓
+verify
+  ↓
+determine success
+```
+
+using actual project and runtime feedback.
