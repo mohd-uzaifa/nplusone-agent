@@ -214,3 +214,198 @@ Keep the original N+1 implementation as the controlled test case.
 The Gemini one-shot fix remains documented as the simple baseline
 solution, while Scenario A is returned to the broken state so that the
 advanced agent can be evaluated against the same problem.
+
+---
+
+---
+
+## Experiment 4 — Advanced Autonomous Agent
+
+### Goal
+
+Extend the simple Gemini one-shot approach into an autonomous software engineering workflow capable of inspecting source code, proposing a fix, modifying the permitted file, running verification, and determining whether the fix succeeded.
+
+### Method
+
+A Java-based agent was implemented using the Gemini Java SDK.
+
+The agent was given controlled file-system capabilities:
+
+* `readFile()` — reads project source files
+* `writeFile()` — writes the generated fix
+* `runVerification()` — executes the Maven test suite
+
+The write capability was deliberately restricted to:
+
+```
+src/main/java/com/example/nplusone/AuthorRepository.java
+```
+
+The agent inspected:
+
+* `AuthorController.java`
+* `AuthorRepository.java`
+* `Author.java`
+
+Gemini was instructed to analyze the N+1 problem, propose a concrete fix, provide the complete replacement contents of `AuthorRepository.java`, and avoid modifying unrelated files.
+
+### Iteration 1 — LLM Analyzer
+
+The agent successfully inspected the provided source code and identified the N+1 query problem.
+
+It correctly identified:
+
+```
+author.getBooks().size()
+```
+
+inside the author iteration as the operation that could trigger additional lazy-loading queries.
+
+The agent proposed using:
+
+```
+@EntityGraph(attributePaths = "books")
+```
+
+Evidence was captured in:
+
+```
+evidence/experiment4_iteration1_llm_analyzer/
+```
+
+### Iteration 2 — Read Files
+
+The agent was extended to inspect the actual project files through the controlled `readFile()` capability rather than relying on manually supplied source code.
+
+The agent successfully read the relevant controller, repository, and entity files and generated an analysis based on the actual project state.
+
+Evidence was captured in:
+
+```
+evidence/experiment4_iteration2_read_files/
+```
+
+### Iteration 3 — Restricted Write
+
+The agent was extended with a restricted `writeFile()` capability.
+
+Gemini generated a concrete `AuthorRepository.java` implementation using:
+
+```
+@EntityGraph(attributePaths = "books")
+```
+
+The agent successfully wrote the generated contents to the permitted repository file.
+
+The write operation was restricted so that the agent could not modify arbitrary project files.
+
+### Iteration 4 — Autonomous Verification
+
+The agent was extended with automated verification using:
+
+```
+.\mvnw.cmd test
+```
+
+After applying the generated repository change, the agent automatically ran the project test suite and inspected the resulting output.
+
+The final verification returned:
+
+```
+EXIT_CODE: 0
+
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0
+
+BUILD SUCCESS
+```
+
+Runtime SQL evidence showed a single query using a `LEFT JOIN` between `author` and `book`:
+
+```
+select
+    a1_0.id,
+    b1_0.author_id,
+    b1_0.id,
+    b1_0.title,
+    a1_0.name
+from
+    author a1_0
+left join
+    book b1_0
+        on a1_0.id=b1_0.author_id
+```
+
+The agent therefore determined that the N+1 query pattern had been eliminated and that no further investigation was required.
+
+Evidence was captured in:
+
+```
+evidence/experiment4_iteration4_verification/
+```
+
+### Agent Workflow
+
+The completed workflow is:
+
+```
+Read Files
+    ↓
+Analyze Problem
+    ↓
+Propose Fix
+    ↓
+Restricted Write
+    ↓
+Run Verification
+    ↓
+Inspect SQL / Test Results
+    ↓
+Determine Success
+```
+
+### Result
+
+Experiment 4 successfully demonstrated a controlled autonomous software engineering loop.
+
+Unlike the Experiment 2 one-shot Gemini solution, the advanced agent could interact with the project through controlled tools, modify an explicitly permitted file, execute automated verification, inspect runtime SQL evidence, and determine whether the generated change succeeded.
+
+The final implementation successfully reduced the observed N+1 behavior from:
+
+```
+1 + 5 = 6 queries
+```
+
+to:
+
+```
+1 query
+```
+
+while maintaining:
+
+```
+BUILD SUCCESS
+```
+
+and:
+
+```
+0 test failures
+```
+
+### Evidence
+
+Experiment 4 evidence is organized under:
+
+```
+evidence/experiment4_iteration1_llm_analyzer/
+evidence/experiment4_iteration2_read_files/
+evidence/experiment4_iteration3_write_file/
+evidence/experiment4_iteration4_verification/
+```
+
+The complete agent trajectory is recorded in:
+
+```
+trajectories/experiment-4-advanced-agent.md
+```

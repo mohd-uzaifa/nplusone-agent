@@ -181,17 +181,213 @@ so the agent can apply a proposed code change.
 
 ---
 
-## Next Planned Iteration
+## Iteration 3 — Controlled File Modification
 
-### Iteration 3 — Controlled File Modification
+### Goal
 
-The agent will be given a restricted `write_file` capability.
+Allow the agent to apply its proposed fix through a controlled
+filesystem operation.
 
-The goal is to allow the agent to:
+### Change
 
-1. reason about a fix,
-2. identify the file that should change,
-3. apply the change through a controlled tool,
-4. preserve the frozen baseline outside the agent workspace.
+Added `FileTools.writeFile()` with a restricted write boundary.
 
-The change will then be followed by compilation and verification.
+The tool permits writing only to:
+
+`src/main/java/com/example/nplusone/AuthorRepository.java`
+
+This prevents the agent from arbitrarily modifying unrelated project
+files.
+
+### Agent Workflow
+
+    Actual project files
+            ↓
+    FileTools.readFile()
+            ↓
+    Gemini reasoning
+            ↓
+    Proposed @EntityGraph fix
+            ↓
+    FileTools.writeFile()
+            ↓
+    AuthorRepository.java modified
+            ↓
+    Maven compile
+            ↓
+    Runtime request
+            ↓
+    Hibernate SQL verification
+
+### Result
+
+Gemini generated a complete replacement for `AuthorRepository.java`
+using:
+
+`@EntityGraph(attributePaths = "books")`
+
+The agent successfully passed the generated content to
+`FileTools.writeFile()`.
+
+The tool returned:
+
+`SUCCESS: File written: src/main/java/com/example/nplusone/AuthorRepository.java`
+
+### Compilation
+
+The modified project compiled successfully with:
+
+    .\mvnw.cmd compile
+
+### Runtime Verification
+
+The `/authors` endpoint was executed with the agent-generated fix.
+
+Hibernate produced a single SQL statement using a `LEFT JOIN` between
+the `author` and `book` tables.
+
+Observed query count:
+
+**1 SQL query**
+
+The original restored baseline produces 6 queries, so the agent
+successfully eliminated the observed N+1 behavior.
+
+### Evidence
+
+- Agent proposal and write result:
+  `evidence/experiment4_iteration3_write_file/agent-write-proposal.png`
+- Runtime SQL:
+  `evidence/experiment4_iteration3_write_file/agent-runtime-sql.png`
+
+### Decision
+
+The basic tool-using agent successfully completed:
+
+**read → reason → write → compile → runtime verification**
+
+The next iteration should move verification into the agent itself.
+
+---
+
+## Iteration 4 — Autonomous Verification
+
+### Objective
+
+Extend the agent with controlled execution and verification capabilities so that it can perform a more complete autonomous engineering loop.
+
+### Agent Workflow
+
+The agent was extended to:
+
+1. inspect the relevant source files,
+2. analyze the N+1 query problem,
+3. generate a concrete Spring Data JPA fix,
+4. write the proposed fix,
+5. run automated Maven verification,
+6. inspect the resulting SQL evidence,
+7. inspect the test result and build status,
+8. determine whether the fix succeeded.
+
+### Tools Added
+
+#### `FileTools.readFile()`
+
+Allows the agent to inspect project source files.
+
+#### `FileTools.writeFile()`
+
+Provides a restricted write capability.
+
+The agent is allowed to modify only:
+
+```text
+src/main/java/com/example/nplusone/AuthorRepository.java
+```
+
+This prevents the LLM from arbitrarily modifying other project files.
+
+#### `FileTools.runVerification()`
+
+Runs:
+
+```text
+.\mvnw.cmd test
+```
+
+The verification output is summarized to expose:
+
+* exit code,
+* relevant SQL evidence,
+* test result,
+* build status.
+
+### Agent Result
+
+The agent analyzed the project and identified that `AuthorRepository` already contained:
+
+```java
+@EntityGraph(attributePaths = "books")
+```
+
+It therefore determined that the N+1 problem had already been resolved by the previous iteration and did not require another code change.
+
+### Verification Evidence
+
+The automated verification returned:
+
+```text
+EXIT_CODE: 0
+
+SQL EVIDENCE:
+select
+    a1_0.id,
+    b1_0.author_id,
+    b1_0.id,
+    b1_0.title,
+    a1_0.name
+from
+    author a1_0
+left join
+    book b1_0
+        on a1_0.id=b1_0.author_id
+
+TEST RESULT:
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0
+
+BUILD SUCCESS
+```
+
+The SQL evidence demonstrates that authors and books were retrieved through a single `LEFT JOIN` query rather than separate queries for each author.
+
+### Final Verification
+
+The verification agent concluded:
+
+* **Verification:** Successful
+* **Build:** Successful
+* **Tests:** 1 passed, 0 failures, 0 errors
+* **SQL evidence:** Single `LEFT JOIN` query
+* **Further investigation:** Not required
+
+### Iteration Outcome
+
+Iteration 4 successfully transformed the previous workflow into a more complete autonomous engineering loop:
+
+```text
+Read
+  ↓
+Analyze
+  ↓
+Propose Fix
+  ↓
+Restricted Write
+  ↓
+Run Verification
+  ↓
+Inspect SQL/Test Results
+  ↓
+Determine Success
+```
+
+This demonstrates controlled agentic software engineering with restricted file modification and automated verification.
