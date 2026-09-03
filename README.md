@@ -4,48 +4,28 @@ An agentic software engineering tool powered by **Google Gemini** that detects, 
 
 The project combines LLM reasoning with real source-code inspection, controlled code modification, automated verification, and runtime SQL evidence.
 
+---
+
 ## Overview
 
-The **N+1 Query Problem** is a common database performance issue in ORM-based applications.
+The **N+1 Query Problem** is a common performance issue in ORM-based applications.
 
-Instead of fetching related data efficiently in a single query, an application may execute:
+Instead of efficiently fetching related data, an application may execute:
 
 * 1 query to fetch the parent entities
 * N additional queries to fetch related entities for each parent
 
-For example, fetching 5 authors and then lazily loading their books can result in:
+This project uses a controlled Spring Boot + Hibernate application to demonstrate the problem and an agentic workflow that can identify and fix it.
 
-```text
-1 query → fetch authors
-5 queries → fetch books for each author
+The agent is not just used for code generation. It can:
 
-Total = 6 SQL queries
-```
-
-This project builds an agent that can inspect the Spring Boot codebase, identify the cause of the N+1 problem, apply a targeted fix, and verify the result using actual Hibernate SQL output.
-
----
-
-## Key Result
-
-In the controlled test scenario:
-
-| Implementation      | SQL Queries |
-| ------------------- | ----------: |
-| Baseline N+1        |       **6** |
-| Gemini one-shot fix |       **1** |
-| Restored baseline   |       **6** |
-| Agentic fix         |       **1** |
-
-### Improvement
-
-**6 → 1 SQL queries**
-
-* 5 fewer database queries
-* **83.3% reduction**
-* Verified using actual Hibernate SQL logs
-
-The important part is that success is determined from **runtime SQL evidence**, not simply from whether the project compiles.
+1. Inspect the actual source code
+2. Analyze the root cause
+3. Generate a targeted fix
+4. Modify the source code through a restricted tool
+5. Run automated verification
+6. Inspect runtime Hibernate SQL output
+7. Determine whether the fix actually reduced the query count
 
 ---
 
@@ -58,9 +38,9 @@ Author
  └── books → Book
 ```
 
-The relationship is configured for lazy loading.
+The `Author → Book` relationship uses lazy loading.
 
-The `/authors` endpoint retrieves authors and accesses their books:
+The `/authors` endpoint retrieves authors and then accesses their books:
 
 ```java
 authorRepository.findAll();
@@ -70,9 +50,19 @@ author.getBooks().size();
 
 Because the books are lazily loaded, Hibernate performs an additional query for each author.
 
-With 5 authors:
+With 5 authors, the baseline produces:
 
 ```text
+1 author query
++
+5 book queries
+=
+6 SQL queries
+```
+
+Conceptually:
+
+```sql
 SELECT ... FROM author;
 
 SELECT ... FROM book WHERE author_id = 1;
@@ -82,157 +72,131 @@ SELECT ... FROM book WHERE author_id = 4;
 SELECT ... FROM book WHERE author_id = 5;
 ```
 
-Result:
-
-```text
-1 + 5 = 6 queries
-```
+This is the classic **1 + N query pattern**.
 
 ---
 
-# How the Agent Works
+## How the Agent Works
 
 The agent follows a controlled software-engineering workflow:
 
 ```text
-┌──────────────────────┐
-│ Inspect Source Code  │
-└──────────┬───────────┘
-           ↓
-┌──────────────────────┐
-│ Analyze Root Cause   │
-└──────────┬───────────┘
-           ↓
-┌──────────────────────┐
-│ Generate Targeted Fix│
-└──────────┬───────────┘
-           ↓
-┌──────────────────────┐
-│ Modify Source File   │
-└──────────┬───────────┘
-           ↓
-┌──────────────────────┐
-│ Run Maven Tests      │
-└──────────┬───────────┘
-           ↓
-┌──────────────────────┐
-│ Inspect SQL Evidence │
-└──────────┬───────────┘
-           ↓
-┌──────────────────────┐
-│ Determine Result     │
-└──────────────────────┘
+Inspect source code
+       ↓
+Analyze root cause
+       ↓
+Generate targeted fix
+       ↓
+Modify source file
+       ↓
+Run Maven verification
+       ↓
+Inspect Hibernate SQL
+       ↓
+Evaluate result
 ```
 
-The agent is powered by Gemini for reasoning, but the actual software-engineering workflow is implemented by the project.
+Gemini provides the reasoning and code-generation capability, while the project provides the tools and execution environment needed to interact with the actual codebase.
 
 ---
 
-# Agent Architecture
+## Agent Architecture
 
 The agent is implemented in Java and uses the Google Gemini API.
 
-### Main components
-
 ```text
 NPlusOneAgent
+│
+├── Gemini
+│   └── Analysis + fix generation
 │
 ├── FileTools
 │   ├── readFile()
 │   ├── writeFile()
 │   └── runVerification()
 │
-├── Gemini
-│   └── reasoning / code generation
-│
-└── Maven + Hibernate
-    └── build / tests / SQL evidence
+└── Spring Boot / Maven / Hibernate
+    ├── Application
+    ├── Tests
+    └── SQL evidence
 ```
 
 ### Workflow
 
-### 1. Inspect
+### 1. Source Inspection
 
-The agent reads the relevant application files:
+The agent reads relevant application files, including:
 
 * `AuthorController.java`
 * `AuthorRepository.java`
 * `Author.java`
 
-This gives the model actual context from the codebase instead of asking it to solve the problem from a generic description.
+This gives Gemini actual context from the codebase.
 
-### 2. Analyze
+### 2. Root Cause Analysis
 
-Gemini analyzes the source and identifies the lazy-loading pattern responsible for the N+1 queries.
+Gemini identifies the lazy-loading behavior responsible for the N+1 queries.
 
-The agent predicts the expected query pattern:
+For the controlled scenario, the expected pattern is:
 
 ```text
 1 + N queries
 ```
 
-### 3. Generate a Fix
+### 3. Fix Generation
 
-The agent generates a targeted repository-level modification.
+The agent generates a targeted repository-level fix.
 
-For this scenario, the selected solution uses:
+For this scenario, the generated solution uses:
 
 ```java
 @EntityGraph(attributePaths = {"books"})
 ```
 
-This allows the books to be fetched together with the authors.
+This allows the related books to be fetched together with the authors.
 
-### 4. Modify the Code
+### 4. Controlled Code Modification
 
-The agent writes the generated repository implementation into the project.
+The agent writes the generated implementation through a dedicated file-writing tool.
 
-For safety, the write operation is restricted to the intended repository file rather than allowing unrestricted modifications across the entire project.
+The write operation is intentionally restricted to the repository file used for the fix rather than allowing unrestricted modifications across the project.
 
-### 5. Verify
+### 5. Automated Verification
 
-The agent runs the project's Maven verification process.
-
-It checks:
+The agent runs the Maven verification workflow and collects:
 
 * Maven exit status
-* test results
-* build result
+* Test results
+* Build status
 * Hibernate SQL output
 
-### 6. Validate Runtime Behavior
+### 6. Runtime Validation
 
-Compilation alone is not considered sufficient evidence.
+A successful build alone is not considered sufficient.
 
-The important question is:
-
-> Did the number of SQL queries actually decrease?
-
-The successful agent run produced a single SQL statement using a join between the author and book tables.
+The agent evaluates the actual SQL generated by Hibernate to determine whether the N+1 behavior was eliminated.
 
 ---
 
-# Agent Tools
+## Agent Tools
 
-The agent has a small set of purpose-built tools.
-
-## `readFile()`
+### `readFile()`
 
 Reads source files from the project so Gemini can reason about the actual implementation.
 
-## `writeFile()`
+### `writeFile()`
 
 Writes the generated fix to the designated repository file.
 
-The write scope is intentionally restricted to:
+The current implementation restricts this operation to:
 
 ```text
 AuthorRepository.java
 ```
 
-## `runVerification()`
+### `runVerification()`
 
-Runs the verification workflow and returns summarized evidence including:
+Runs the verification process and returns summarized evidence such as:
 
 ```text
 EXIT_CODE
@@ -241,32 +205,32 @@ TEST RESULT
 BUILD STATUS
 ```
 
-This allows the agent to reason about whether its change actually worked.
+This allows the agent to evaluate the result using execution evidence rather than relying only on generated code.
 
 ---
 
-# Example Fix
+## Example Fix
 
-### Before
+### Baseline
 
-The repository uses the normal `findAll()` behavior:
+The repository initially uses the standard `findAll()` behavior:
 
 ```java
 public interface AuthorRepository extends JpaRepository<Author, Long> {
 }
 ```
 
-Authors are retrieved first, while their books are lazily loaded later.
+The controller then accesses the lazily loaded books.
 
-This produces:
+Result:
 
 ```text
 6 SQL queries
 ```
 
-### Agent-generated approach
+### Agent-generated Fix
 
-The agent adds an entity graph:
+The agent can modify the repository to use an entity graph:
 
 ```java
 @EntityGraph(attributePaths = {"books"})
@@ -274,7 +238,7 @@ The agent adds an entity graph:
 List<Author> findAll();
 ```
 
-Hibernate can then retrieve the authors and their books together.
+This changes how the related books are fetched.
 
 Result:
 
@@ -284,133 +248,72 @@ Result:
 
 ---
 
-# Results
+# Results & Evaluation
 
-The project tested the same controlled scenario across multiple implementations.
+The project evaluates the same controlled scenario across multiple implementations.
 
-| Experiment   | Description                           |    Result |
-| ------------ | ------------------------------------- | --------: |
-| Experiment 1 | Baseline N+1 reproduction             | 6 queries |
-| Experiment 2 | Gemini one-shot fix                   |   1 query |
-| Experiment 3 | Baseline restored                     | 6 queries |
-| Experiment 4 | Agent inspection → fix → verification |   1 query |
+| Implementation      | SQL Queries |
+| ------------------- | ----------: |
+| Baseline N+1        |       **6** |
+| Gemini one-shot fix |       **1** |
+| Restored baseline   |       **6** |
+| Agentic workflow    |       **1** |
 
-### Final comparison
+### Improvement
 
 ```text
-Baseline
-
-Authors query       ████████████████████  1
-Book queries         ██████████████████████████████████████████████████  5
-Total                                      6
-
-
-Agent Fix
-
-Combined query      ████████████████████  1
-Total                                      1
+6 → 1 SQL queries
 ```
 
-**Query reduction: 83.3%**
+That represents:
+
+* **5 fewer queries**
+* **83.3% reduction**
+* Verified using runtime Hibernate SQL output
+
+The baseline was restored before evaluating the agent to ensure that the agent was operating on the original N+1 implementation rather than an already-fixed codebase.
+
+### Evaluation Process
+
+1. Reproduced the baseline N+1 behavior.
+2. Tested a direct Gemini-generated fix.
+3. Restored the original implementation.
+4. Ran the agentic inspect → fix → verify workflow.
+5. Compared the resulting Hibernate SQL output.
+
+The important distinction is that the final result was validated through **actual runtime SQL evidence**, not simply compilation or test success.
 
 ---
 
-# Why This Is an Agent
+## Why This Is an Agent
 
-The project is not simply a prompt sent to an LLM.
+The project goes beyond asking an LLM for a code snippet.
 
-The agent performs an engineering workflow around the LLM:
+The LLM is integrated into a workflow that connects reasoning with real software-engineering actions:
 
 ```text
 LLM reasoning
      +
-real codebase inspection
+source-code inspection
      +
-controlled tool usage
+controlled modification
      +
-source-code modification
-     +
-automated verification
+automated execution
      +
 runtime evidence
 ```
 
-This distinction is important.
+This allows the system to move from:
 
-An LLM suggesting:
+> "Here is a possible fix."
 
-> "Use @EntityGraph"
+to:
 
-is different from an agent that:
-
-1. Inspects the repository
-2. Identifies the N+1 cause
-3. Generates the change
-4. Modifies the actual source file
-5. Runs the application/tests
-6. Inspects SQL output
-7. Determines whether the fix actually reduced queries
+> "I inspected the code, applied the fix, ran the application, and verified the resulting SQL."
 
 ---
 
-# Experiments
-
-The project was developed and evaluated through several controlled experiments.
-
-### Experiment 1 — Baseline
-
-The original lazy-loading implementation was executed.
-
-```text
-Expected: 1 + N
-Observed: 6 queries
-```
-
-### Experiment 2 — One-Shot Gemini Fix
-
-Gemini was given the relevant code and asked to fix the N+1 problem directly.
-
-The resulting `@EntityGraph` solution reduced the query count:
-
-```text
-6 → 1
-```
-
-### Experiment 3 — Baseline Restoration
-
-The baseline implementation was restored to ensure that the comparison was not accidentally performed against an already-fixed application.
-
-```text
-Observed: 6 queries
-```
-
-### Experiment 4 — Agentic Workflow
-
-The autonomous workflow was executed:
-
-```text
-Inspect
-  ↓
-Analyze
-  ↓
-Generate fix
-  ↓
-Write
-  ↓
-Verify
-  ↓
-Inspect SQL
-```
-
-The agent successfully produced the same repository-level optimization and runtime evidence showed:
-
-```text
-1 SQL query
-```
-
----
-
-# Project Structure
+## Project Structure
 
 ```text
 nplusone-agent/
@@ -432,9 +335,7 @@ nplusone-agent/
 │   └── test/
 │
 ├── evidence/
-│
 ├── trajectories/
-│
 ├── EXPERIMENT_LOGS.md
 ├── README.md
 ├── pom.xml
@@ -444,7 +345,7 @@ nplusone-agent/
 
 ---
 
-# Tech Stack
+## Tech Stack
 
 ### Application
 
@@ -458,7 +359,7 @@ nplusone-agent/
 ### Agent
 
 * Google Gemini API
-* Java Gemini SDK
+* Gemini Java SDK
 
 ### Development
 
@@ -477,7 +378,7 @@ nplusone-agent/
 * Internet connection for Maven dependency resolution
 * Gemini API key for running the agent
 
-Check Java:
+Check the installed Java version:
 
 ```bash
 java -version
@@ -487,7 +388,7 @@ The project expects Java 25.
 
 ---
 
-## Clone
+## Clone the Repository
 
 ```bash
 git clone https://github.com/mohd-uzaifa/nplusone-agent.git
@@ -544,11 +445,9 @@ cd nplusone-agent
 
 ---
 
-# Running the Agent
+## Configure Gemini
 
-The agent requires a Gemini API key.
-
-Set the environment variable before running the agent.
+Set your Gemini API key as an environment variable before running the agent.
 
 ### Windows PowerShell
 
@@ -562,15 +461,11 @@ $env:GEMINI_API_KEY="YOUR_API_KEY"
 export GEMINI_API_KEY="YOUR_API_KEY"
 ```
 
-Do **not** commit API keys to GitHub.
-
-The agent can then be executed using the project's Java/Maven configuration.
-
 ---
 
 # Reproducibility
 
-The project uses an H2 in-memory database and a deterministic test scenario:
+The evaluation uses a controlled H2 in-memory database with:
 
 ```text
 Authors: 5
@@ -579,14 +474,10 @@ Relationship: Author → Books
 Loading: Lazy
 ```
 
-The baseline consistently demonstrates:
+The baseline produces:
 
 ```text
-1 author query
-+
-5 book queries
-=
-6 SQL queries
+1 author query + 5 book queries = 6 queries
 ```
 
 The optimized implementation produces:
@@ -595,7 +486,7 @@ The optimized implementation produces:
 1 SQL query
 ```
 
-The query count is determined from Hibernate SQL output rather than inferred from source code alone.
+Query counts are determined from Hibernate SQL output.
 
 ---
 
@@ -605,12 +496,12 @@ This project is intentionally a controlled demonstration of an agentic software-
 
 Current limitations include:
 
-* Evaluation uses a single primary N+1 scenario.
-* The database is an in-memory H2 environment.
-* The write tool is intentionally restricted to a specific repository file.
+* Evaluation focuses on a single primary N+1 scenario.
+* The database uses an in-memory H2 environment.
+* The write tool is restricted to a specific repository file.
 * The agent does not currently perform unrestricted repository-wide refactoring.
-* There is no fully automated retry/recovery loop for every possible LLM or verification failure.
-* The measured 6 → 1 improvement is demonstrated on a small synthetic dataset and should not be interpreted as a production benchmark.
+* There is no fully automated recovery loop for every possible LLM or verification failure.
+* The 6 → 1 improvement is demonstrated on a small synthetic dataset and should not be interpreted as a production-scale benchmark.
 
 ---
 
@@ -619,44 +510,18 @@ Current limitations include:
 Possible extensions include:
 
 * Support for multiple N+1 patterns
-* Automatic detection of N+1 problems from SQL traces
-* Repository-wide code analysis
-* Approval workflow before modifying files
-* Automatic retry and recovery after failed verification
+* Automatic N+1 detection from SQL traces
 * Larger evaluation suites
-* Before/after performance benchmarking
-* Support for additional Hibernate performance problems
-* More advanced query optimization strategies
-* Integration with CI/CD pipelines
+* Automated before/after benchmarking
+* Repository-wide source analysis
+* Approval workflows for broader code modifications
+* Automatic retry and recovery after failed verification
+* Additional Hibernate performance optimizations
+* CI/CD integration
+* Support for other ORM performance issues
 
 ---
 
-# Key Takeaway
-
-The main idea behind this project is simple:
-
-> **An LLM suggesting code is not the same as an agent fixing software.**
-
-The useful part is the complete loop:
-
-```text
-Understand the code
-       ↓
-Identify the problem
-       ↓
-Make a targeted change
-       ↓
-Run the software
-       ↓
-Measure the result
-       ↓
-Use the evidence to determine success
-```
-
-This project demonstrates how an LLM can be integrated into a controlled software-engineering workflow rather than being used only as a code-generation interface.
-
----
-
-## License
+# License
 
 This project is intended for educational and portfolio purposes.
